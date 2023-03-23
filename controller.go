@@ -201,21 +201,24 @@ func (c *Controller) syncHandler(key string) error {
 			_, err = c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
 		}
 	} else {
-		c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), name+"-disable-secret-access", v1.DeleteOptions{})
+		policyName := namespace + "-" + name + "-" + "disable-secret-access"
+		c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), policyName, v1.DeleteOptions{})
 	}
 	if err != nil {
-		c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), name+"-disable-secret-access", v1.DeleteOptions{})
+		policyName := namespace + "-" + name + "-" + "disable-secret-access"
+		c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), policyName, v1.DeleteOptions{})
 		return err
 	}
 
 	return nil
 }
 
-func newKarmorSecretPolicy(matchLabels map[string]string, secretDirPath string, namespaces string, deploymentName string) *securityv1.KubeArmorPolicy {
+func newKarmorSecretPolicy(matchLabels map[string]string, secretDirPath string, namespace string, name string) *securityv1.KubeArmorPolicy {
+	policyName := namespace + "-" + name + "-" + "disable-secret-access"
 	return &securityv1.KubeArmorPolicy{
 		ObjectMeta: v1.ObjectMeta{
-			Name:      deploymentName + "-disable-secret-access",
-			Namespace: namespaces,
+			Name:      policyName,
+			Namespace: namespace,
 		},
 		Spec: securityv1.KubeArmorPolicySpec{
 			Selector: securityv1.SelectorType{
