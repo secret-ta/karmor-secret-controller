@@ -200,8 +200,11 @@ func (c *Controller) syncHandler(key string) error {
 			newPolicy := newKarmorSecretPolicy(deployment.Labels, secretPath, namespace, name)
 			_, err = c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
 		}
+	} else {
+		c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), name+"-disable-secret-access", v1.DeleteOptions{})
 	}
 	if err != nil {
+		c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), name+"-disable-secret-access", v1.DeleteOptions{})
 		return err
 	}
 
