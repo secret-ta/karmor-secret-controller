@@ -10,6 +10,7 @@ import (
 	"k8s.io/klog/v2"
 
 	karmorclientset "github.com/kubearmor/KubeArmor/pkg/KubeArmorPolicy/client/clientset/versioned"
+	karmorpolicyinformer "github.com/kubearmor/KubeArmor/pkg/KubeArmorPolicy/client/informers/externalversions"
 	kubeinformers "k8s.io/client-go/informers"
 )
 
@@ -40,9 +41,12 @@ func main() {
 	}
 
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
-	controller := NewController(kubeClient, karmorClient, kubeInformerFactory.Apps().V1().Deployments())
+	karmorpolicyInformerFactory := karmorpolicyinformer.NewSharedInformerFactory(karmorClient, time.Second*30)
+	controller := NewController(kubeClient, karmorClient, kubeInformerFactory.Apps().V1().Deployments(),
+		karmorpolicyInformerFactory.Security().V1().KubeArmorPolicies())
 
 	kubeInformerFactory.Start(stopCh)
+	karmorpolicyInformerFactory.Start(stopCh)
 
 	if err = controller.Run(int(numworkers), stopCh); err != nil {
 		klog.Fatalf("Error running controller: %s", err.Error())

@@ -6,7 +6,9 @@ import (
 	"time"
 
 	securityv1 "github.com/kubearmor/KubeArmor/pkg/KubeArmorPolicy/api/security.kubearmor.com/v1"
-	karmorclientset "github.com/kubearmor/KubeArmor/pkg/KubeArmorPolicy/client/clientset/versioned"
+	karmorpolicyclientset "github.com/kubearmor/KubeArmor/pkg/KubeArmorPolicy/client/clientset/versioned"
+	karmorpolicyinformer "github.com/kubearmor/KubeArmor/pkg/KubeArmorPolicy/client/informers/externalversions/security.kubearmor.com/v1"
+	karmorpolicylister "github.com/kubearmor/KubeArmor/pkg/KubeArmorPolicy/client/listers/security.kubearmor.com/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -20,25 +22,31 @@ import (
 )
 
 type Controller struct {
-	kubeclientset   kubernetes.Interface
-	karmorclientset karmorclientset.Interface
+	kubeclientset         kubernetes.Interface
+	karmorpolicyclientset karmorpolicyclientset.Interface
 
-	deploymentsLister appslisters.DeploymentLister
-	deploymentsSynced cache.InformerSynced
-	workqueue         workqueue.RateLimitingInterface
+	deploymentsLister  appslisters.DeploymentLister
+	deploymentsSynced  cache.InformerSynced
+	karmorpolicylister karmorpolicylister.KubeArmorPolicyLister
+	karmorpolicySynced cache.InformerSynced
+
+	workqueue workqueue.RateLimitingInterface
 }
 
 func NewController(
 	kubeclientset kubernetes.Interface,
-	karmorclientset karmorclientset.Interface,
-	deploymentInformer appsinformers.DeploymentInformer) *Controller {
+	karmorpolicyclientset karmorpolicyclientset.Interface,
+	deploymentInformer appsinformers.DeploymentInformer,
+	karmorpolicyInformer karmorpolicyinformer.KubeArmorPolicyInformer) *Controller {
 
 	dc := &Controller{
-		kubeclientset:     kubeclientset,
-		karmorclientset:   karmorclientset,
-		deploymentsLister: deploymentInformer.Lister(),
-		deploymentsSynced: deploymentInformer.Informer().HasSynced,
-		workqueue:         workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "karmor-deployment"),
+		kubeclientset:         kubeclientset,
+		karmorpolicyclientset: karmorpolicyclientset,
+		deploymentsLister:     deploymentInformer.Lister(),
+		deploymentsSynced:     deploymentInformer.Informer().HasSynced,
+		karmorpolicylister:    karmorpolicyInformer.Lister(),
+		karmorpolicySynced:    karmorpolicyInformer.Informer().HasSynced,
+		workqueue:             workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "karmor-deployment"),
 	}
 
 	klog.Info("Setting up event handlers")
@@ -111,7 +119,7 @@ func (c *Controller) Run(workers int, stopCh <-chan struct{}) error {
 	klog.Info("Starting karmor secret controller")
 
 	klog.Info("Waiting for informer caches to sync")
-	if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced); !ok {
+	if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced, c.karmorpolicySynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
 	klog.Info("Starting workers")
@@ -194,27 +202,28 @@ func (c *Controller) syncHandler(key string) error {
 		}
 
 		if secretPath != "" && namespace == "default" {
-			if secretPath[len(secretPath)-1] != '/' {
-				secretPath += "/"
+			policyName := namespace + "-" + name + "-" + "disable-secret-access"
+			if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
+				if secretPath[len(secretPath)-1] != '/' {
+					secretPath += "/"
+				}
+				klog.Infof("Creating policy %v", policyName)
+
+				newPolicy := newKarmorSecretPolicy(deployment.Labels, secretPath, namespace, policyName)
+				c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
 			}
-			newPolicy := newKarmorSecretPolicy(deployment.Labels, secretPath, namespace, name)
-			_, err = c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
 		}
 	} else {
 		policyName := namespace + "-" + name + "-" + "disable-secret-access"
-		c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), policyName, v1.DeleteOptions{})
+		if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err == nil {
+			klog.Infof("Deleting policy %v", policyName)
+			c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), policyName, v1.DeleteOptions{})
+		}
 	}
-	if err != nil {
-		policyName := namespace + "-" + name + "-" + "disable-secret-access"
-		c.karmorclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), policyName, v1.DeleteOptions{})
-		return err
-	}
-
 	return nil
 }
 
-func newKarmorSecretPolicy(matchLabels map[string]string, secretDirPath string, namespace string, name string) *securityv1.KubeArmorPolicy {
-	policyName := namespace + "-" + name + "-" + "disable-secret-access"
+func newKarmorSecretPolicy(matchLabels map[string]string, secretDirPath string, namespace string, policyName string) *securityv1.KubeArmorPolicy {
 	return &securityv1.KubeArmorPolicy{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      policyName,
