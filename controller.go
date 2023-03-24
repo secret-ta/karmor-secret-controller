@@ -190,26 +190,34 @@ func (c *Controller) syncHandler(key string) error {
 	klog.Infof("Process deployment: %v", deployment.Name)
 
 	if deployment.Status.ReadyReplicas == deployment.Status.Replicas {
-		secretPath := ""
+		secretPaths := map[string]struct{}{}
 		for _, volume := range deployment.Spec.Template.Spec.Volumes {
 			if volume.Secret != nil {
-				for _, volumeMount := range deployment.Spec.Template.Spec.Containers[0].VolumeMounts {
-					if volumeMount.Name == volume.Name {
-						secretPath = volumeMount.MountPath
+				for _, container := range deployment.Spec.Template.Spec.Containers {
+					for _, containerVolMount := range container.VolumeMounts {
+						if containerVolMount.Name == volume.Name {
+							secretPaths[containerVolMount.MountPath] = struct{}{}
+						}
 					}
 				}
 			}
 		}
 
-		if secretPath != "" {
+		secretDirPaths := []string{}
+		for secretPath := range secretPaths {
+			if secretPath[len(secretPath)-1] != '/' {
+				secretPath += "/"
+			}
+			secretDirPaths = append(secretDirPaths, secretPath)
+		}
+
+		if len(secretDirPaths) != 0 {
 			policyName := namespace + "-" + name + "-" + "disable-secret-access"
 			if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
-				if secretPath[len(secretPath)-1] != '/' {
-					secretPath += "/"
-				}
+
 				klog.Infof("Creating policy %v", policyName)
 
-				newPolicy := newKarmorSecretPolicy(deployment.Labels, secretPath, namespace, policyName)
+				newPolicy := newKarmorSecretPolicy(deployment.Labels, secretDirPaths, namespace, policyName)
 				c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
 			}
 		}
@@ -223,7 +231,16 @@ func (c *Controller) syncHandler(key string) error {
 	return nil
 }
 
-func newKarmorSecretPolicy(matchLabels map[string]string, secretDirPath string, namespace string, policyName string) *securityv1.KubeArmorPolicy {
+func newKarmorSecretPolicy(matchLabels map[string]string, secretDirPaths []string, namespace string, policyName string) *securityv1.KubeArmorPolicy {
+	matchDirectories := []securityv1.FileDirectoryType{}
+
+	for _, secretDirPath := range secretDirPaths {
+		matchDirectories = append(matchDirectories, securityv1.FileDirectoryType{
+			Directory: securityv1.MatchDirectoryType(secretDirPath),
+			Recursive: true,
+		})
+	}
+
 	return &securityv1.KubeArmorPolicy{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      policyName,
@@ -234,12 +251,7 @@ func newKarmorSecretPolicy(matchLabels map[string]string, secretDirPath string, 
 				MatchLabels: matchLabels,
 			},
 			File: securityv1.FileType{
-				MatchDirectories: []securityv1.FileDirectoryType{
-					{
-						Directory: securityv1.MatchDirectoryType(secretDirPath),
-						Recursive: true,
-					},
-				},
+				MatchDirectories: matchDirectories,
 			},
 			Action: securityv1.ActionType("Block"),
 			Capabilities: securityv1.CapabilitiesType{
