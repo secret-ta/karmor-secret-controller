@@ -201,7 +201,7 @@ func (c *Controller) syncHandler(key string) error {
 			}
 		}
 
-		if secretPath != "" && namespace == "default" {
+		if secretPath != "" {
 			policyName := namespace + "-" + name + "-" + "disable-secret-access"
 			if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
 				if secretPath[len(secretPath)-1] != '/' {
