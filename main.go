@@ -43,8 +43,9 @@ func main() {
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
 	karmorpolicyInformerFactory := karmorpolicyinformer.NewSharedInformerFactory(karmorClient, time.Second*30)
 	controller := NewController(kubeClient, karmorClient, kubeInformerFactory.Apps().V1().Deployments(),
+		kubeInformerFactory.Apps().V1().StatefulSets(),
+		kubeInformerFactory.Apps().V1().DaemonSets(),
 		karmorpolicyInformerFactory.Security().V1().KubeArmorPolicies())
-
 	kubeInformerFactory.Start(stopCh)
 	karmorpolicyInformerFactory.Start(stopCh)
 
