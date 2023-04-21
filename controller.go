@@ -10,6 +10,8 @@ import (
 	karmorpolicyinformer "github.com/kubearmor/KubeArmor/pkg/KubeArmorPolicy/client/informers/externalversions/security.kubearmor.com/v1"
 	karmorpolicylister "github.com/kubearmor/KubeArmor/pkg/KubeArmorPolicy/client/listers/security.kubearmor.com/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -102,7 +104,6 @@ func NewController(
 func (c *Controller) add(obj interface{}) {
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
-		klog.Info("Adding deployment", "deployment", klog.KObj(v))
 	case *appsv1.StatefulSet:
 		klog.Info("Adding statefulset", "statefulset", klog.KObj(v))
 	case *appsv1.DaemonSet:
@@ -114,13 +115,9 @@ func (c *Controller) add(obj interface{}) {
 	c.enqueue(obj)
 }
 
-func (c *Controller) update(old, cur interface{}) {
-	oldObj := old.(v1.Object)
-	curObj := old.(v1.Object)
-
-	switch v := cur.(type) {
+func (c *Controller) update(oldObj, newObj interface{}) {
+	switch v := newObj.(type) {
 	case *appsv1.Deployment:
-		klog.Info("Updating deployment", "deployment", klog.KObj(v))
 	case *appsv1.StatefulSet:
 		klog.Info("Updating statefulset", "statefulset", klog.KObj(v))
 	case *appsv1.DaemonSet:
@@ -130,14 +127,11 @@ func (c *Controller) update(old, cur interface{}) {
 		panic(v)
 	}
 
-	if oldObj.GetResourceVersion() == curObj.GetResourceVersion() {
-		return
-	}
-	c.enqueue(cur)
+	c.enqueue(newObj)
 }
 
 func (c *Controller) delete(obj interface{}) {
-	_, ok := obj.(v1.Object)
+	_, ok := obj.(*appsv1.Deployment)
 	if !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
@@ -171,6 +165,7 @@ func (c *Controller) enqueue(obj interface{}) {
 		utilruntime.HandleError(err)
 		return
 	}
+
 	c.workqueue.Add(key)
 }
 
@@ -203,7 +198,6 @@ func (c *Controller) runWorker() {
 
 func (c *Controller) processNextWorkItem() bool {
 	obj, shutdown := c.workqueue.Get()
-	fmt.Println("err, obj: ", obj)
 
 	if shutdown {
 		return false
@@ -238,166 +232,159 @@ func (c *Controller) processNextWorkItem() bool {
 	return true
 }
 
+func getDeploymentKarmorPolicyName(namespace, name string) string {
+	return namespace + "-" + name + "-" + "deployment-disable-secret-access"
+}
+
+func getStatefulSetPolicyName(namespace, name string) string {
+	return namespace + "-" + name + "-" + "stateful-disable-secret-access"
+}
+func getDaemonSetPolicyName(namespace, name string) string {
+	return namespace + "-" + name + "-" + "daemonset-disable-secret-access"
+}
+func (c *Controller) deleteKarmorPolicy(namespace, name string) error {
+	_, err := c.getKarmorPolicy(namespace, name)
+	if err == nil {
+		err = c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), name, v1.DeleteOptions{})
+	}
+	return err
+}
+
+func (c *Controller) getKarmorPolicy(namespace, name string) (*securityv1.KubeArmorPolicy, error) {
+	return c.karmorpolicylister.KubeArmorPolicies(namespace).Get(name)
+}
+
 func (c *Controller) syncHandler(key string) error {
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
-		return nil
+		return err
 	}
 
 	deployment, deploymentErr := c.deploymentsLister.Deployments(namespace).Get(name)
 	statefulset, statefulsetErr := c.statefulSetLister.StatefulSets(namespace).Get(name)
 	daemonset, daemonsetErr := c.daemonSetLister.DaemonSets(namespace).Get(name)
 
-	if deploymentErr == nil {
-		c.processDeploymentWorkload(namespace, name, deployment)
-	} else if statefulsetErr == nil {
-		c.processStatefulSetWorkload(namespace, name, statefulset)
-	} else if daemonsetErr == nil {
-		c.processDaemonSetWorkload(namespace, name, daemonset)
+	if errors.IsNotFound(deploymentErr) {
+		klog.Info("Deployment has been deleted: ", namespace, "/", name)
+		c.deleteKarmorPolicy(namespace, getDeploymentKarmorPolicyName(namespace, name))
+		return nil
 	} else {
-		panic(key)
+		_, err = c.getKarmorPolicy(namespace, getDeploymentKarmorPolicyName(namespace, name))
+		if !errors.IsNotFound(err) && (deployment.Status.ReadyReplicas == deployment.Status.Replicas) {
+			return nil
+		}
+		c.processDeploymentWorkload(namespace, name, deployment)
+	}
+
+	if errors.IsNotFound(statefulsetErr) {
+		klog.Info("StatefulSet has been deleted: ", namespace, "/", name)
+		c.deleteKarmorPolicy(namespace, getStatefulSetPolicyName(namespace, name))
+		return nil
+	} else {
+		_, err = c.getKarmorPolicy(namespace, getStatefulSetPolicyName(namespace, name))
+		if !errors.IsNotFound(err) && (statefulset.Status.ReadyReplicas == statefulset.Status.Replicas) {
+			return nil
+		}
+		c.processStatefulSetWorkload(namespace, name, statefulset)
+	}
+
+	if errors.IsNotFound(daemonsetErr) {
+		klog.Info("Daemonset has been deleted: ", namespace, "/", name)
+		c.deleteKarmorPolicy(namespace, getDaemonSetPolicyName(namespace, name))
+		return nil
+	} else {
+		_, err = c.getKarmorPolicy(namespace, getDaemonSetPolicyName(namespace, name))
+		if !errors.IsNotFound(err) && (statefulset.Status.ReadyReplicas == statefulset.Status.Replicas) {
+			return nil
+		}
+		c.processDaemonSetWorkload(namespace, name, daemonset)
 	}
 
 	return nil
 }
 
-func (c *Controller) processDeploymentWorkload(namespace, name string, deployment *appsv1.Deployment) {
-	klog.Infof("Process deployment: %v", deployment.Name)
-	if deployment.Status.ReadyReplicas == deployment.Status.Replicas {
-		secretPaths := map[string]struct{}{}
-		for _, volume := range deployment.Spec.Template.Spec.Volumes {
+func (c *Controller) processWorkload(namespace, name string, template *corev1.PodTemplateSpec, isReady bool, getPolicyName func(string, string) string) {
+	if isReady {
+		secretPaths := []string{}
+		secretDirPaths := []string{}
+		labels := template.Labels
+		needSecureEnv := false
+		for key, value := range labels {
+			if key == "env-secret-secured" && value == "true" {
+				needSecureEnv = true
+				break
+			}
+		}
+
+		if needSecureEnv {
+			secretDirPaths = append(secretDirPaths, "/vol/")
+			secretPaths = append(secretPaths, "/proc/1/environ")
+		}
+
+		for _, volume := range template.Spec.Volumes {
 			if volume.Secret != nil {
-				for _, container := range deployment.Spec.Template.Spec.Containers {
+				for _, container := range template.Spec.Containers {
 					for _, containerVolMount := range container.VolumeMounts {
 						if containerVolMount.Name == volume.Name {
-							secretPaths[containerVolMount.MountPath] = struct{}{}
+							secretDirPath := containerVolMount.MountPath
+							if secretDirPath[len(secretDirPath)-1] != '/' {
+								secretDirPath += "/"
+							}
+							secretDirPaths = append(secretDirPaths, secretDirPath)
 						}
 					}
 				}
 			}
 		}
 
-		secretDirPaths := []string{}
-		for secretPath := range secretPaths {
-			if secretPath[len(secretPath)-1] != '/' {
-				secretPath += "/"
-			}
-			secretDirPaths = append(secretDirPaths, secretPath)
-		}
-
 		if len(secretDirPaths) != 0 {
-			policyName := namespace + "-" + name + "-" + "deployment-disable-secret-access"
+			policyName := getPolicyName(namespace, name)
 			if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
-
 				klog.Infof("Creating policy %v", policyName)
 
-				newPolicy := newKarmorSecretPolicy(deployment.Labels, secretDirPaths, namespace, policyName)
-				c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
+				newPolicy := newKarmorSecretPolicy(labels, secretPaths, secretDirPaths, namespace, policyName)
+				_, err := c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
+				if err != nil {
+					klog.Errorf("Error creating policy: %v", err)
+				}
+
 			}
 		}
 	} else {
-		policyName := namespace + "-" + name + "-" + "deployment-disable-secret-access"
-		if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err == nil {
-			klog.Infof("Deleting policy %v", policyName)
-			c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), policyName, v1.DeleteOptions{})
-		}
+		c.deleteKarmorPolicy(namespace, getPolicyName(namespace, name))
 	}
+}
+
+func (c *Controller) processDeploymentWorkload(namespace, name string, deployment *appsv1.Deployment) {
+	isReady := deployment.Status.ReadyReplicas == deployment.Status.Replicas
+	c.processWorkload(namespace, name, &deployment.Spec.Template, isReady, getDeploymentKarmorPolicyName)
 }
 
 func (c *Controller) processStatefulSetWorkload(namespace, name string, statefulset *appsv1.StatefulSet) {
-	klog.Infof("Process statefulset: %v", statefulset.Name)
-	if statefulset.Status.ReadyReplicas == statefulset.Status.Replicas {
-		secretPaths := map[string]struct{}{}
-		for _, volume := range statefulset.Spec.Template.Spec.Volumes {
-			if volume.Secret != nil {
-				for _, container := range statefulset.Spec.Template.Spec.Containers {
-					for _, containerVolMount := range container.VolumeMounts {
-						if containerVolMount.Name == volume.Name {
-							secretPaths[containerVolMount.MountPath] = struct{}{}
-						}
-					}
-				}
-			}
-		}
-
-		secretDirPaths := []string{}
-		for secretPath := range secretPaths {
-			if secretPath[len(secretPath)-1] != '/' {
-				secretPath += "/"
-			}
-			secretDirPaths = append(secretDirPaths, secretPath)
-		}
-
-		if len(secretDirPaths) != 0 {
-			policyName := namespace + "-" + name + "-" + "statefulset-disable-secret-access"
-			if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
-
-				klog.Infof("Creating policy %v", policyName)
-
-				newPolicy := newKarmorSecretPolicy(statefulset.Labels, secretDirPaths, namespace, policyName)
-				c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
-			}
-		}
-	} else {
-		policyName := namespace + "-" + name + "-" + "statefulset-disable-secret-access"
-		if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err == nil {
-			klog.Infof("Deleting policy %v", policyName)
-			c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), policyName, v1.DeleteOptions{})
-		}
-	}
+	isReady := statefulset.Status.ReadyReplicas == statefulset.Status.Replicas
+	c.processWorkload(namespace, name, &statefulset.Spec.Template, isReady, getStatefulSetPolicyName)
 }
 
 func (c *Controller) processDaemonSetWorkload(namespace, name string, daemonset *appsv1.DaemonSet) {
-	klog.Infof("Process statefulset: %v", daemonset.Name)
-	if daemonset.Status.NumberReady == daemonset.Status.NumberAvailable {
-		secretPaths := map[string]struct{}{}
-		for _, volume := range daemonset.Spec.Template.Spec.Volumes {
-			if volume.Secret != nil {
-				for _, container := range daemonset.Spec.Template.Spec.Containers {
-					for _, containerVolMount := range container.VolumeMounts {
-						if containerVolMount.Name == volume.Name {
-							secretPaths[containerVolMount.MountPath] = struct{}{}
-						}
-					}
-				}
-			}
-		}
-
-		secretDirPaths := []string{}
-		for secretPath := range secretPaths {
-			if secretPath[len(secretPath)-1] != '/' {
-				secretPath += "/"
-			}
-			secretDirPaths = append(secretDirPaths, secretPath)
-		}
-
-		if len(secretDirPaths) != 0 {
-			policyName := namespace + "-" + name + "-" + "daemonset-disable-secret-access"
-			if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
-
-				klog.Infof("Creating policy %v", policyName)
-
-				newPolicy := newKarmorSecretPolicy(daemonset.Labels, secretDirPaths, namespace, policyName)
-				c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
-			}
-		}
-	} else {
-		policyName := namespace + "-" + name + "-" + "daemonset-disable-secret-access"
-		if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err == nil {
-			klog.Infof("Deleting policy %v", policyName)
-			c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Delete(context.TODO(), policyName, v1.DeleteOptions{})
-		}
-	}
+	isReady := daemonset.Status.NumberReady == daemonset.Status.NumberAvailable
+	c.processWorkload(namespace, name, &daemonset.Spec.Template, isReady, getDaemonSetPolicyName)
 }
 
-func newKarmorSecretPolicy(matchLabels map[string]string, secretDirPaths []string, namespace string, policyName string) *securityv1.KubeArmorPolicy {
+func newKarmorSecretPolicy(matchLabels map[string]string, secretPaths []string, secretDirPaths []string, namespace string, policyName string) *securityv1.KubeArmorPolicy {
 	matchDirectories := []securityv1.FileDirectoryType{}
+	matchPaths := []securityv1.FilePathType{}
 
 	for _, secretDirPath := range secretDirPaths {
 		matchDirectories = append(matchDirectories, securityv1.FileDirectoryType{
 			Directory: securityv1.MatchDirectoryType(secretDirPath),
 			Recursive: true,
+		})
+	}
+
+	for _, secretPath := range secretPaths {
+		matchPaths = append(matchPaths, securityv1.FilePathType{
+			Path: securityv1.MatchPathType(secretPath),
 		})
 	}
 
@@ -411,6 +398,7 @@ func newKarmorSecretPolicy(matchLabels map[string]string, secretDirPaths []strin
 				MatchLabels: matchLabels,
 			},
 			File: securityv1.FileType{
+				MatchPaths:       matchPaths,
 				MatchDirectories: matchDirectories,
 			},
 			Action: securityv1.ActionType("Block"),
