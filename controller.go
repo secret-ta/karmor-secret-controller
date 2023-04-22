@@ -104,10 +104,11 @@ func NewController(
 func (c *Controller) add(obj interface{}) {
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
+		klog.Infof("Adding deployment: %v", klog.KObj(v))
 	case *appsv1.StatefulSet:
-		klog.Info("Adding statefulset", "statefulset", klog.KObj(v))
+		klog.Infof("Adding statefulset: %v", klog.KObj(v))
 	case *appsv1.DaemonSet:
-		klog.Info("Adding daemonset", "daemonset", klog.KObj(v))
+		klog.Infof("Adding daemonset: %v", klog.KObj(v))
 	default:
 		klog.Error("Unrecognized object type")
 		panic(obj)
@@ -118,10 +119,11 @@ func (c *Controller) add(obj interface{}) {
 func (c *Controller) update(oldObj, newObj interface{}) {
 	switch v := newObj.(type) {
 	case *appsv1.Deployment:
+		klog.Infof("Updating deployment: %v", klog.KObj(v))
 	case *appsv1.StatefulSet:
-		klog.Info("Updating statefulset", "statefulset", klog.KObj(v))
+		klog.Infof("Updating statefulset: %v", klog.KObj(v))
 	case *appsv1.DaemonSet:
-		klog.Info("Updating daemonset", "daemonset", klog.KObj(v))
+		klog.Infof("Adding daemonset: %v", klog.KObj(v))
 	default:
 		klog.Error("Unrecognized object type")
 		panic(v)
@@ -146,11 +148,11 @@ func (c *Controller) delete(obj interface{}) {
 	}
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
-		klog.Info("Deleting deployment", "deployment", klog.KObj(v))
+		klog.Infof("Deleting deployment: %v", klog.KObj(v))
 	case *appsv1.StatefulSet:
-		klog.Info("Deleting statefulset", "statefulset", klog.KObj(v))
+		klog.Infof("Adding statefulset: %v", klog.KObj(v))
 	case *appsv1.DaemonSet:
-		klog.Info("Deleting daemonset", "daemonset", klog.KObj(v))
+		klog.Infof("Adding daemonset: %v", klog.KObj(v))
 	default:
 		klog.Error("Unrecognized object type")
 		panic(v)
@@ -265,43 +267,56 @@ func (c *Controller) syncHandler(key string) error {
 	statefulset, statefulsetErr := c.statefulSetLister.StatefulSets(namespace).Get(name)
 	daemonset, daemonsetErr := c.daemonSetLister.DaemonSets(namespace).Get(name)
 
-	if errors.IsNotFound(deploymentErr) {
-		klog.Info("Deployment has been deleted: ", namespace, "/", name)
-		c.deleteKarmorPolicy(namespace, getDeploymentKarmorPolicyName(namespace, name))
-		return nil
-	} else {
-		_, err = c.getKarmorPolicy(namespace, getDeploymentKarmorPolicyName(namespace, name))
-		if !errors.IsNotFound(err) && (deployment.Status.ReadyReplicas == deployment.Status.Replicas) {
-			return nil
-		}
-		c.processDeploymentWorkload(namespace, name, deployment)
-	}
-
-	if errors.IsNotFound(statefulsetErr) {
-		klog.Info("StatefulSet has been deleted: ", namespace, "/", name)
-		c.deleteKarmorPolicy(namespace, getStatefulSetPolicyName(namespace, name))
-		return nil
-	} else {
-		_, err = c.getKarmorPolicy(namespace, getStatefulSetPolicyName(namespace, name))
-		if !errors.IsNotFound(err) && (statefulset.Status.ReadyReplicas == statefulset.Status.Replicas) {
-			return nil
-		}
-		c.processStatefulSetWorkload(namespace, name, statefulset)
-	}
-
-	if errors.IsNotFound(daemonsetErr) {
-		klog.Info("Daemonset has been deleted: ", namespace, "/", name)
-		c.deleteKarmorPolicy(namespace, getDaemonSetPolicyName(namespace, name))
-		return nil
-	} else {
-		_, err = c.getKarmorPolicy(namespace, getDaemonSetPolicyName(namespace, name))
-		if !errors.IsNotFound(err) && (statefulset.Status.ReadyReplicas == statefulset.Status.Replicas) {
-			return nil
-		}
-		c.processDaemonSetWorkload(namespace, name, daemonset)
-	}
+	c.handleDeployment(namespace, name, deployment, deploymentErr)
+	c.handleStatefulSet(namespace, name, statefulset, statefulsetErr)
+	c.handleDaemonSet(namespace, name, daemonset, daemonsetErr)
 
 	return nil
+}
+
+func (c *Controller) handleDeployment(namespace, name string, deployment *appsv1.Deployment, err error) {
+	if errors.IsNotFound(err) {
+		klog.Info("Deployment has been deleted: ", namespace, "/", name)
+		c.deleteKarmorPolicy(namespace, getDeploymentKarmorPolicyName(namespace, name))
+		return
+	}
+
+	_, policyErr := c.getKarmorPolicy(namespace, getDeploymentKarmorPolicyName(namespace, name))
+	if !errors.IsNotFound(policyErr) && (deployment.Status.ReadyReplicas == deployment.Status.Replicas) {
+		return
+	}
+
+	c.processDeploymentWorkload(namespace, name, deployment)
+}
+
+func (c *Controller) handleStatefulSet(namespace, name string, statefulset *appsv1.StatefulSet, err error) {
+	if errors.IsNotFound(err) {
+		klog.Info("StatefulSet has been deleted: ", namespace, "/", name)
+		c.deleteKarmorPolicy(namespace, getStatefulSetPolicyName(namespace, name))
+		return
+	}
+
+	_, policyErr := c.getKarmorPolicy(namespace, getStatefulSetPolicyName(namespace, name))
+	if !errors.IsNotFound(policyErr) && (statefulset.Status.ReadyReplicas == statefulset.Status.Replicas) {
+		return
+	}
+
+	c.processStatefulSetWorkload(namespace, name, statefulset)
+}
+
+func (c *Controller) handleDaemonSet(namespace, name string, daemonset *appsv1.DaemonSet, err error) {
+	if errors.IsNotFound(err) {
+		klog.Info("Daemonset has been deleted: ", namespace, "/", name)
+		c.deleteKarmorPolicy(namespace, getDaemonSetPolicyName(namespace, name))
+		return
+	}
+
+	_, policyErr := c.getKarmorPolicy(namespace, getDaemonSetPolicyName(namespace, name))
+	if !errors.IsNotFound(policyErr) && (daemonset.Status.DesiredNumberScheduled == daemonset.Status.NumberAvailable) {
+		return
+	}
+
+	c.processDaemonSetWorkload(namespace, name, daemonset)
 }
 
 func (c *Controller) processWorkload(namespace, name string, template *corev1.PodTemplateSpec, isReady bool, getPolicyName func(string, string) string) {
