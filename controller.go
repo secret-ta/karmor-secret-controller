@@ -40,12 +40,14 @@ type Controller struct {
 }
 
 func NewController(
+	ctx context.Context,
 	kubeclientset kubernetes.Interface,
 	karmorpolicyclientset karmorpolicyclientset.Interface,
 	deploymentInformer appsinformers.DeploymentInformer,
 	statefulSetInformer appsinformers.StatefulSetInformer,
 	daemonSetInformer appsinformers.DaemonSetInformer,
 	karmorpolicyInformer karmorpolicyinformer.KubeArmorPolicyInformer) *Controller {
+	logger := klog.FromContext(ctx)
 
 	c := &Controller{
 		kubeclientset:         kubeclientset,
@@ -61,78 +63,81 @@ func NewController(
 		workqueue:             workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "karmor-secret"),
 	}
 
-	klog.Info("Setting up event handlers")
+	logger.Info("Setting up event handlers")
 	deploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			c.add(obj)
+			c.add(ctx, obj)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			c.update(oldObj, newObj)
+			c.update(ctx, oldObj, newObj)
 		},
 		DeleteFunc: func(obj interface{}) {
-			c.delete(obj)
+			c.delete(ctx, obj)
 		},
 	})
 
 	statefulSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			c.add(obj)
+			c.add(ctx, obj)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			c.update(oldObj, newObj)
+			c.update(ctx, oldObj, newObj)
 		},
 		DeleteFunc: func(obj interface{}) {
-			c.delete(obj)
+			c.delete(ctx, obj)
 		},
 	})
 
 	daemonSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			c.add(obj)
+			c.add(ctx, obj)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			c.update(oldObj, newObj)
+			c.update(ctx, oldObj, newObj)
 		},
 		DeleteFunc: func(obj interface{}) {
-			c.delete(obj)
+			c.delete(ctx, obj)
 		},
 	})
 
 	return c
 }
 
-func (c *Controller) add(obj interface{}) {
+func (c *Controller) add(ctx context.Context, obj interface{}) {
+	logger := klog.FromContext(ctx)
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
-		klog.Infof("Adding deployment: %v", klog.KObj(v))
+		logger.Info("Adding deployment", klog.KObj(v))
 	case *appsv1.StatefulSet:
-		klog.Infof("Adding statefulset: %v", klog.KObj(v))
+		logger.Info("Adding statefulset", klog.KObj(v))
 	case *appsv1.DaemonSet:
-		klog.Infof("Adding daemonset: %v", klog.KObj(v))
+		logger.Info("Adding daemonset", klog.KObj(v))
 	default:
-		klog.Error("Unrecognized object type")
+		logger.Error(nil, "Unrecognized object type")
 		panic(obj)
 	}
 	c.enqueue(obj)
 }
 
-func (c *Controller) update(oldObj, newObj interface{}) {
+func (c *Controller) update(ctx context.Context, oldObj, newObj interface{}) {
+	logger := klog.FromContext(ctx)
 	switch v := newObj.(type) {
 	case *appsv1.Deployment:
-		klog.Infof("Updating deployment: %v", klog.KObj(v))
+		logger.Info("Updating deployment", klog.KObj(v))
 	case *appsv1.StatefulSet:
-		klog.Infof("Updating statefulset: %v", klog.KObj(v))
+		logger.Info("Updating statefulset", klog.KObj(v))
 	case *appsv1.DaemonSet:
-		klog.Infof("Adding daemonset: %v", klog.KObj(v))
+		logger.Info("Adding daemonset", klog.KObj(v))
 	default:
-		klog.Error("Unrecognized object type")
+		logger.Error(nil, "Unrecognized object type")
 		panic(v)
 	}
 
 	c.enqueue(newObj)
 }
 
-func (c *Controller) delete(obj interface{}) {
+func (c *Controller) delete(ctx context.Context, obj interface{}) {
+	logger := klog.FromContext(ctx)
 	_, ok := obj.(*appsv1.Deployment)
 	if !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
@@ -148,13 +153,13 @@ func (c *Controller) delete(obj interface{}) {
 	}
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
-		klog.Infof("Deleting deployment: %v", klog.KObj(v))
+		logger.Info("Deleting deployment", klog.KObj(v))
 	case *appsv1.StatefulSet:
-		klog.Infof("Adding statefulset: %v", klog.KObj(v))
+		logger.Info("Adding statefulset", klog.KObj(v))
 	case *appsv1.DaemonSet:
-		klog.Infof("Adding daemonset: %v", klog.KObj(v))
+		logger.Info("Adding daemonset", klog.KObj(v))
 	default:
-		klog.Error("Unrecognized object type")
+		logger.Error(nil, "Unrecognized object type")
 		panic(v)
 	}
 	c.enqueue(obj)
@@ -171,35 +176,37 @@ func (c *Controller) enqueue(obj interface{}) {
 	c.workqueue.Add(key)
 }
 
-func (c *Controller) Run(workers int, stopCh <-chan struct{}) error {
+func (c *Controller) Run(ctx context.Context, workers int) error {
 	defer utilruntime.HandleCrash()
 	defer c.workqueue.ShutDown()
+	logger := klog.FromContext(ctx)
 
-	klog.Info("Starting karmor secret controller")
+	logger.Info("Starting karmor secret controller")
 
-	klog.Info("Waiting for informer caches to sync")
-	if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced, c.karmorpolicySynced); !ok {
+	logger.Info("Waiting for informer caches to sync")
+	if ok := cache.WaitForCacheSync(ctx.Done(), c.deploymentsSynced, c.karmorpolicySynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
-	klog.Info("Starting workers")
+	logger.Info("Starting workers")
 	for i := 0; i < workers; i++ {
-		go wait.Until(c.runWorker, time.Second, stopCh)
+		go wait.UntilWithContext(ctx, c.runWorker, time.Second)
 	}
 
-	klog.Info("Started workers")
-	<-stopCh
+	logger.Info("Started workers")
+	<-ctx.Done()
 	klog.Info("Shutting down workers")
 
 	return nil
 }
 
-func (c *Controller) runWorker() {
-	for c.processNextWorkItem() {
+func (c *Controller) runWorker(ctx context.Context) {
+	for c.processNextWorkItem(ctx) {
 	}
 }
 
-func (c *Controller) processNextWorkItem() bool {
+func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 	obj, shutdown := c.workqueue.Get()
+	logger := klog.FromContext(ctx)
 
 	if shutdown {
 		return false
@@ -216,13 +223,13 @@ func (c *Controller) processNextWorkItem() bool {
 			return nil
 		}
 
-		if err := c.syncHandler(key); err != nil {
+		if err := c.syncHandler(ctx, key); err != nil {
 			c.workqueue.AddRateLimited(key)
 			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
 		}
 
 		c.workqueue.Forget(obj)
-		klog.Infof("Successfully synced '%s'", key)
+		logger.Info("Successfully synced", "resourceName", key)
 		return nil
 	}(obj)
 
@@ -256,7 +263,9 @@ func (c *Controller) getKarmorPolicy(namespace, name string) (*securityv1.KubeAr
 	return c.karmorpolicylister.KubeArmorPolicies(namespace).Get(name)
 }
 
-func (c *Controller) syncHandler(key string) error {
+func (c *Controller) syncHandler(ctx context.Context, key string) error {
+	// logger := klog.LoggerWithValues(klog.FromContext(ctx), "resourceName", key)
+
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
@@ -267,16 +276,18 @@ func (c *Controller) syncHandler(key string) error {
 	statefulset, statefulsetErr := c.statefulSetLister.StatefulSets(namespace).Get(name)
 	daemonset, daemonsetErr := c.daemonSetLister.DaemonSets(namespace).Get(name)
 
-	c.handleDeployment(namespace, name, deployment, deploymentErr)
-	c.handleStatefulSet(namespace, name, statefulset, statefulsetErr)
-	c.handleDaemonSet(namespace, name, daemonset, daemonsetErr)
+	c.handleDeployment(ctx, namespace, name, deployment, deploymentErr)
+	c.handleStatefulSet(ctx, namespace, name, statefulset, statefulsetErr)
+	c.handleDaemonSet(ctx, namespace, name, daemonset, daemonsetErr)
 
 	return nil
 }
 
-func (c *Controller) handleDeployment(namespace, name string, deployment *appsv1.Deployment, err error) {
+func (c *Controller) handleDeployment(ctx context.Context, namespace, name string, deployment *appsv1.Deployment, err error) {
+	logger := klog.FromContext(ctx)
+
 	if errors.IsNotFound(err) {
-		klog.Info("Deployment has been deleted: ", namespace, "/", name)
+		logger.Info("Deployment has been deleted", namespace, "/", name)
 		c.deleteKarmorPolicy(namespace, getDeploymentKarmorPolicyName(namespace, name))
 		return
 	}
@@ -286,12 +297,14 @@ func (c *Controller) handleDeployment(namespace, name string, deployment *appsv1
 		return
 	}
 
-	c.processDeploymentWorkload(namespace, name, deployment)
+	c.processDeploymentWorkload(ctx, namespace, name, deployment)
 }
 
-func (c *Controller) handleStatefulSet(namespace, name string, statefulset *appsv1.StatefulSet, err error) {
+func (c *Controller) handleStatefulSet(ctx context.Context, namespace, name string, statefulset *appsv1.StatefulSet, err error) {
+	logger := klog.FromContext(ctx)
+
 	if errors.IsNotFound(err) {
-		klog.Info("StatefulSet has been deleted: ", namespace, "/", name)
+		logger.Info("StatefulSet has been deleted", namespace, "/", name)
 		c.deleteKarmorPolicy(namespace, getStatefulSetPolicyName(namespace, name))
 		return
 	}
@@ -301,12 +314,14 @@ func (c *Controller) handleStatefulSet(namespace, name string, statefulset *apps
 		return
 	}
 
-	c.processStatefulSetWorkload(namespace, name, statefulset)
+	c.processStatefulSetWorkload(ctx, namespace, name, statefulset)
 }
 
-func (c *Controller) handleDaemonSet(namespace, name string, daemonset *appsv1.DaemonSet, err error) {
+func (c *Controller) handleDaemonSet(ctx context.Context, namespace, name string, daemonset *appsv1.DaemonSet, err error) {
+	logger := klog.FromContext(ctx)
+
 	if errors.IsNotFound(err) {
-		klog.Info("Daemonset has been deleted: ", namespace, "/", name)
+		logger.Info("Daemonset has been deleted", namespace, "/", name)
 		c.deleteKarmorPolicy(namespace, getDaemonSetPolicyName(namespace, name))
 		return
 	}
@@ -316,10 +331,12 @@ func (c *Controller) handleDaemonSet(namespace, name string, daemonset *appsv1.D
 		return
 	}
 
-	c.processDaemonSetWorkload(namespace, name, daemonset)
+	c.processDaemonSetWorkload(ctx, namespace, name, daemonset)
 }
 
-func (c *Controller) processWorkload(namespace, name string, template *corev1.PodTemplateSpec, isReady bool, getPolicyName func(string, string) string) {
+func (c *Controller) processWorkload(ctx context.Context, namespace, name string, template *corev1.PodTemplateSpec, isReady bool, getPolicyName func(string, string) string) {
+	logger := klog.FromContext(ctx)
+
 	if isReady {
 		secretPaths := []string{}
 		secretDirPaths := []string{}
@@ -356,12 +373,12 @@ func (c *Controller) processWorkload(namespace, name string, template *corev1.Po
 		if len(secretDirPaths) != 0 {
 			policyName := getPolicyName(namespace, name)
 			if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
-				klog.Infof("Creating policy %v", policyName)
+				logger.Info("Creating policy", policyName)
 
 				newPolicy := newKarmorSecretPolicy(labels, secretPaths, secretDirPaths, namespace, policyName)
 				_, err := c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
 				if err != nil {
-					klog.Errorf("Error creating policy: %v", err)
+					logger.Error(err, "Error creating policy")
 				}
 
 			}
@@ -371,19 +388,19 @@ func (c *Controller) processWorkload(namespace, name string, template *corev1.Po
 	}
 }
 
-func (c *Controller) processDeploymentWorkload(namespace, name string, deployment *appsv1.Deployment) {
+func (c *Controller) processDeploymentWorkload(ctx context.Context, namespace, name string, deployment *appsv1.Deployment) {
 	isReady := deployment.Status.ReadyReplicas == deployment.Status.Replicas
-	c.processWorkload(namespace, name, &deployment.Spec.Template, isReady, getDeploymentKarmorPolicyName)
+	c.processWorkload(ctx, namespace, name, &deployment.Spec.Template, isReady, getDeploymentKarmorPolicyName)
 }
 
-func (c *Controller) processStatefulSetWorkload(namespace, name string, statefulset *appsv1.StatefulSet) {
+func (c *Controller) processStatefulSetWorkload(ctx context.Context, namespace, name string, statefulset *appsv1.StatefulSet) {
 	isReady := statefulset.Status.ReadyReplicas == statefulset.Status.Replicas
-	c.processWorkload(namespace, name, &statefulset.Spec.Template, isReady, getStatefulSetPolicyName)
+	c.processWorkload(ctx, namespace, name, &statefulset.Spec.Template, isReady, getStatefulSetPolicyName)
 }
 
-func (c *Controller) processDaemonSetWorkload(namespace, name string, daemonset *appsv1.DaemonSet) {
+func (c *Controller) processDaemonSetWorkload(ctx context.Context, namespace, name string, daemonset *appsv1.DaemonSet) {
 	isReady := daemonset.Status.NumberReady == daemonset.Status.NumberAvailable
-	c.processWorkload(namespace, name, &daemonset.Spec.Template, isReady, getDaemonSetPolicyName)
+	c.processWorkload(ctx, namespace, name, &daemonset.Spec.Template, isReady, getDaemonSetPolicyName)
 }
 
 func newKarmorSecretPolicy(matchLabels map[string]string, secretPaths []string, secretDirPaths []string, namespace string, policyName string) *securityv1.KubeArmorPolicy {

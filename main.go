@@ -24,16 +24,19 @@ func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
 
-	stopCh := signals.SetupSignalHandler()
+	ctx := signals.SetupSignalHandler()
+	logger := klog.FromContext(ctx)
 
 	cfg, err := clientcmd.BuildConfigFromFlags(masterURL, kubeconfig)
 	if err != nil {
-		klog.Fatalf("Error building kubeconfig: %s", err.Error())
+		logger.Error(err, "Error building kubeconfig")
+		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 
 	kubeClient, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		klog.Fatalf("Error building kubernetes clientset: %s", err.Error())
+		logger.Error(err, "Error building kubernetes clientset")
+		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 	karmorClient, err := karmorclientset.NewForConfig(cfg)
 	if err != nil {
@@ -42,14 +45,14 @@ func main() {
 
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
 	karmorpolicyInformerFactory := karmorpolicyinformer.NewSharedInformerFactory(karmorClient, time.Second*30)
-	controller := NewController(kubeClient, karmorClient, kubeInformerFactory.Apps().V1().Deployments(),
+	controller := NewController(ctx, kubeClient, karmorClient, kubeInformerFactory.Apps().V1().Deployments(),
 		kubeInformerFactory.Apps().V1().StatefulSets(),
 		kubeInformerFactory.Apps().V1().DaemonSets(),
 		karmorpolicyInformerFactory.Security().V1().KubeArmorPolicies())
-	kubeInformerFactory.Start(stopCh)
-	karmorpolicyInformerFactory.Start(stopCh)
+	kubeInformerFactory.Start(ctx.Done())
+	karmorpolicyInformerFactory.Start(ctx.Done())
 
-	if err = controller.Run(int(numworkers), stopCh); err != nil {
+	if err = controller.Run(ctx, int(numworkers)); err != nil {
 		klog.Fatalf("Error running controller: %s", err.Error())
 	}
 }
