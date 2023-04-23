@@ -1,0 +1,91 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: karmor-secret-controller-workloads-role
+  labels:
+    karmor-secret-controller-role: "true"
+rules:
+- apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+  - "daemonsets"
+  - "statefulsets"
+  verbs:
+  - "get"
+  - "list"
+  - "watch"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: karmor-secret-controller-karmor-policy-role
+  labels:
+    karmor-secret-controller-role: "true"
+rules:
+- apiGroups:
+  - "security.kubearmor.com"
+  resources:
+  - "kubearmorpolicies"
+  verbs:
+  - "get"
+  - "list"
+  - "watch"
+  - "create"
+  - "update"
+  - "patch"
+  - "delete"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: karmor-secret-controller-role
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-karmor-secret-controller-role: "true"
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      karmor-secret-controller-role: "true"
+rules: []
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: karmor-secret-controller
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: karmor-secret-controller-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: karmor-secret-controller-role
+subjects:
+- kind: ServiceAccount
+  name: karmor-secret-controller
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: karmor-secret-controller
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: karmor-secret-controller
+  template:
+    metadata:
+      labels:
+        app: karmor-secret-controller
+    spec:
+      serviceAccountName: karmor-secret-controller
+      containers:
+      - name: karmor-secret-controller
+        image: kadeksuryam/karmor-secret-controller:latest
+        args:
+        - "--numworker"
+        - "5"
