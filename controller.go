@@ -33,7 +33,7 @@ type Controller struct {
 	statefulSetSynced  cache.InformerSynced
 	daemonSetLister    appslisters.DaemonSetLister
 	daemonSetSynced    cache.InformerSynced
-	karmorpolicylister karmorpolicylister.KubeArmorPolicyLister
+	karmorpolicyLister karmorpolicylister.KubeArmorPolicyLister
 	karmorpolicySynced cache.InformerSynced
 
 	workqueue workqueue.RateLimitingInterface
@@ -58,7 +58,7 @@ func NewController(
 		statefulSetSynced:     statefulSetInformer.Informer().HasSynced,
 		daemonSetLister:       daemonSetInformer.Lister(),
 		daemonSetSynced:       daemonSetInformer.Informer().HasSynced,
-		karmorpolicylister:    karmorpolicyInformer.Lister(),
+		karmorpolicyLister:    karmorpolicyInformer.Lister(),
 		karmorpolicySynced:    karmorpolicyInformer.Informer().HasSynced,
 		workqueue:             workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "karmor-secret"),
 	}
@@ -260,7 +260,7 @@ func (c *Controller) deleteKarmorPolicy(namespace, name string) error {
 }
 
 func (c *Controller) getKarmorPolicy(namespace, name string) (*securityv1.KubeArmorPolicy, error) {
-	return c.karmorpolicylister.KubeArmorPolicies(namespace).Get(name)
+	return c.karmorpolicyLister.KubeArmorPolicies(namespace).Get(name)
 }
 
 func (c *Controller) syncHandler(ctx context.Context, key string) error {
@@ -353,6 +353,7 @@ func (c *Controller) processWorkload(ctx context.Context, namespace, name string
 			secretDirPaths = append(secretDirPaths, "/vol/")
 			secretPaths = append(secretPaths, "/proc/1/environ")
 		}
+		secretDirPaths = append(secretDirPaths, "/var/run/secrets/kubernetes.io/serviceaccount")
 
 		for _, volume := range template.Spec.Volumes {
 			if volume.Secret != nil {
@@ -372,7 +373,7 @@ func (c *Controller) processWorkload(ctx context.Context, namespace, name string
 
 		if len(secretDirPaths) != 0 {
 			policyName := getPolicyName(namespace, name)
-			if _, err := c.karmorpolicylister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
+			if _, err := c.karmorpolicyLister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
 				logger.Info("Creating policy", policyName)
 
 				newPolicy := newKarmorSecretPolicy(labels, secretPaths, secretDirPaths, namespace, policyName)
