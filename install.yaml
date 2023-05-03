@@ -86,6 +86,7 @@ spec:
       containers:
       - name: karmor-secret-controller
         image: kadeksuryam/karmor-secret-controller:latest
+        imagePullPolicy: Always
         args:
         - "--numworker"
         - "5"

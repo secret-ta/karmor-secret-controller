@@ -353,7 +353,6 @@ func (c *Controller) processWorkload(ctx context.Context, namespace, name string
 			secretDirPaths = append(secretDirPaths, "/vol/")
 			secretPaths = append(secretPaths, "/proc/1/environ")
 		}
-		secretDirPaths = append(secretDirPaths, "/var/run/secrets/kubernetes.io/serviceaccount")
 
 		for _, volume := range template.Spec.Volumes {
 			if volume.Secret != nil {
