@@ -21,13 +21,15 @@ apply_manifests() {
   kubectl apply -f statefulset_${manifest_suffix}.yaml -n $namespace
   kubectl apply -f daemonset_${manifest_suffix}.yaml -n $namespace
 
-  # Wait for all resources to be ready
-  sleep 60
+  # Wait for all pod to be ready
+  kubectl wait --for=condition=ready --timeout=300s pod -n $namespace --all
 }
 
 # Apply manifests for single secret and multiple secrets
 apply_manifests $NAMESPACE1 "single_secret"
 apply_manifests $NAMESPACE2 "multiple_secrets"
+
+sleep 30
 
 # Function to test secret access
 test_secret_access() {
