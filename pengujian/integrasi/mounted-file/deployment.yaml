@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pengujian-integrasi-mounted-file-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pengujian-integrasi-mounted-file-deployment
+  template:
+    metadata:
+      labels:
+        app: pengujian-integrasi-mounted-file-deployment
+    spec:
+      containers:
+      - name: pengujian-integrasi-mounted-file-deployment
+        image: kadeksuryam/pengujian-integrasi-mounted-file:latest
+        env:
+        - name: SECRET_V1_USERNAME_PATH
+          value: /etc/secret-v1/USERNAME
+        - name: SECRET_V1_PASSWORD_PATH
+          value: /etc/secret-v1/PASSWORD
+        - name: SECRET_V2_USERNAME_PATH
+          value: /etc/secret-v2/USERNAME
+        - name: SECRET_V2_PASSWORD_PATH
+          value: /etc/secret-v2/PASSWORD
+        volumeMounts:
+        - name: secret-v1-volume
+          mountPath: "/etc/secret-v1"
+          readOnly: true
+        - name: secret-v2-volume
+          mountPath: "/etc/secret-v2"
+          readOnly: true
+      volumes:
+      - name: secret-v1-volume
+        secret:
+          secretName: pengujian-integrasi-mounted-file-secret-v1
+      - name: secret-v2-volume
+        secret:
+          secretName: pengujian-integrasi-mounted-file-secret-v2

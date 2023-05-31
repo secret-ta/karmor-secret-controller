@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pengujian-integrasi-env-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pengujian-integrasi-env-deployment
+  template:
+    metadata:
+      labels:
+        app: pengujian-integrasi-env-deployment
+        env-secret-secured: "true"
+    spec:
+      initContainers: # secret definition here, not on the "main" containers
+      - name: create-env-file
+        image: kadeksuryam/init-container-secret:latest
+        imagePullPolicy: Always
+        env:
+        # proxy ITB, initContainer's process need to access internet
+        - name: HTTP_PROXY
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: HTTPS_PROXY
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: http_proxy
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: https_proxy
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        # secrets definition start
+        - name: USERNAME_V1
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-integrasi-env-secret-v1
+                key: USERNAME
+        - name: PASSWORD_V1
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-integrasi-env-secret-v1
+                key: PASSWORD
+        - name: USERNAME_V2
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-integrasi-env-secret-v2
+                key: USERNAME
+        - name: PASSWORD_V2
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-integrasi-env-secret-v2
+                key: PASSWORD
+        # secrets definition end
+        - name: IMAGE_NAME # mandatory, same as the containers[0].image below
+          value: kadeksuryam/pengujian-integrasi-env:latest
+        volumeMounts: # mandatory
+        - name: init-vol
+          mountPath: /vol
+      containers:
+      - name: pengujian-integrasi-env-deployment
+        image:  kadeksuryam/pengujian-integrasi-env:latest
+        command:
+        - /vol/init.sh
+        volumeMounts:
+        - name: init-vol
+          mountPath: /vol
+      volumes: # mandatory
+      - name: init-vol
+        emptyDir: {}
