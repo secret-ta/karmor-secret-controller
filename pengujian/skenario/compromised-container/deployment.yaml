@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pengujian-skenario-container-compromised-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pengujian-skenario-container-compromised-deployment
+  template:
+    metadata:
+      labels:
+        app: pengujian-skenario-container-compromised-deployment
+        env-secret-secured: "true"
+        mf-secret-secured: "true"
+    spec:
+      initContainers: # secret definition here, not on the "main" containers
+      - name: create-env-file
+        image: kadeksuryam/init-container-secret:latest
+        imagePullPolicy: Always
+        env:
+        # proxy ITB, initContainer's process need to access internet
+        - name: HTTP_PROXY
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: HTTPS_PROXY
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: http_proxy
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: https_proxy
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        # secrets definition start
+        - name: SECRET1_USERNAME_ENV
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-skenario-container-compromised-secret1
+                key: USERNAME
+        - name: SECRET1_PASSWORD_ENV
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-skenario-container-compromised-secret1
+                key: PASSWORD
+        - name: SECRET2_USERNAME_ENV
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-skenario-container-compromised-secret2
+                key: USERNAME
+        - name: SECRET2_PASSWORD_ENV
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-skenario-container-compromised-secret2
+                key: PASSWORD
+        # secrets definition end
+        - name: IMAGE_NAME # mandatory, same as the containers[0].image below
+          value: kadeksuryam/spring4shell-app-example:latest
+        volumeMounts: # mandatory
+        - name: init-vol
+          mountPath: /vol
+      containers:
+      - name: pengujian-skenario-container-compromised-deployment
+        image:  kadeksuryam/spring4shell-app-example:latest
+        command:
+        - /vol/init.sh
+        env:
+        - name: SECRET1_USERNAME_PATH
+          value: /etc/secret1/USERNAME
+        - name: SECRET1_PASSWORD_PATH
+          value: /etc/secret1/PASSWORD
+        - name: SECRET2_USERNAME_PATH
+          value: /etc/secret2/USERNAME
+        - name: SECRET2_PASSWORD_PATH
+          value: /etc/secret2/PASSWORD
+        volumeMounts:
+        - name: init-vol
+          mountPath: /vol
+        - name: secret1-volume
+          mountPath: "/etc/secret1"
+          readOnly: true
+        - name: secret2-volume
+          mountPath: "/etc/secret2"
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /app/greeting
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes: # mandatory
+      - name: init-vol
+        emptyDir: {}
+      - name: secret1-volume
+        secret:
+          secretName: pengujian-skenario-container-compromised-secret1
+      - name: secret2-volume
+        secret:
+          secretName: pengujian-skenario-container-compromised-secret2

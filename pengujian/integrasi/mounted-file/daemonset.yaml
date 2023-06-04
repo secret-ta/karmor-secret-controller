@@ -1,20 +1,19 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
-  name: pengujian-integrasi-mounted-file-deployment
+  name: pengujian-integrasi-mounted-file-daemonset
 spec:
-  replicas: 2
   selector:
     matchLabels:
-      app: pengujian-integrasi-mounted-file-deployment
+      app: pengujian-integrasi-mounted-file-daemonset
   template:
     metadata:
       labels:
-        app: pengujian-integrasi-mounted-file-deployment
+        app: pengujian-integrasi-mounted-file-daemonset
         mf-secret-secured: "true"
     spec:
       containers:
-      - name: pengujian-integrasi-mounted-file-deployment
+      - name: pengujian-integrasi-mounted-file-daemonset
         image: kadeksuryam/pengujian-integrasi-mounted-file:latest
         env:
         - name: SECRET_V1_USERNAME_PATH

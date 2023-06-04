@@ -1,0 +1,11 @@
+FROM lunasec/tomcat-9.0.59-jdk11
+
+WORKDIR /app
+
+ARG WAR_FILE=build/libs/*
+COPY ${WAR_FILE} app.war
+
+RUN mv *.war /usr/local/tomcat/webapps/
+
+EXPOSE 8080
+CMD ["catalina.sh", "run"]

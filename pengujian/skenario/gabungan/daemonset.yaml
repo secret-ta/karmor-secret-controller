@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pengujian-skenario-gabungan-daemonset
+spec:
+  selector:
+    matchLabels:
+      app: pengujian-skenario-gabungan-daemonset
+  template:
+    metadata:
+      labels:
+        app: pengujian-skenario-gabungan-daemonset
+        env-secret-secured: "true"
+        mf-secret-secured: "true"
+    spec:
+      initContainers:
+      - name: create-env-file
+        image: kadeksuryam/init-container-secret:latest
+        imagePullPolicy: Always
+        env:
+        # proxy ITB, initContainer's process need to access internet
+        - name: HTTP_PROXY
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: HTTPS_PROXY
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: http_proxy
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: https_proxy
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        # secrets definition start
+        - name: USERNAME1
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-skenario-gabungan-secret1
+                key: USERNAME
+        - name: PASSWORD1
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-skenario-gabungan-secret1
+                key: PASSWORD
+        - name: USERNAME2
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-skenario-gabungan-secret2
+                key: USERNAME
+        - name: PASSWORD2
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-skenario-gabungan-secret2
+                key: PASSWORD
+        # secrets definition end
+        - name: IMAGE_NAME # mandatory, same as the containers[0].image below
+          value: kadeksuryam/pengujian-skenario-gabungan:latest
+        volumeMounts:
+        - name: init-vol
+          mountPath: /vol
+      containers:
+      - name: print-envs
+        image: kadeksuryam/pengujian-skenario-gabungan:latest
+        command:
+        - /vol/init.sh
+        env:
+        - name: SECRET1_USERNAME_PATH
+          value: /etc/secret1/USERNAME
+        - name: SECRET1_PASSWORD_PATH
+          value: /etc/secret1/PASSWORD
+        - name: SECRET2_USERNAME_PATH
+          value: /etc/secret2/USERNAME
+        - name: SECRET2_PASSWORD_PATH
+          value: /etc/secret2/PASSWORD
+        volumeMounts:
+        - name: init-vol
+          mountPath: /vol
+        - name: secret1-volume
+          mountPath: "/etc/secret1"
+          readOnly: true
+        - name: secret2-volume
+          mountPath: "/etc/secret2"
+          readOnly: true
+      volumes:
+      - name: init-vol
+        emptyDir: {}
+      - name: secret1-volume
+        secret:
+          secretName: pengujian-skenario-gabungan-secret1
+      - name: secret2-volume
+        secret:
+          secretName: pengujian-skenario-gabungan-secret2

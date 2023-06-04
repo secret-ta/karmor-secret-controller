@@ -104,32 +104,22 @@ func NewController(
 }
 
 func (c *Controller) add(ctx context.Context, obj interface{}) {
-	logger := klog.FromContext(ctx)
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
-		logger.Info("Adding deployment", klog.KObj(v))
 	case *appsv1.StatefulSet:
-		logger.Info("Adding statefulset", klog.KObj(v))
 	case *appsv1.DaemonSet:
-		logger.Info("Adding daemonset", klog.KObj(v))
 	default:
-		logger.Error(nil, "Unrecognized object type")
-		panic(obj)
+		panic(v)
 	}
 	c.enqueue(obj)
 }
 
 func (c *Controller) update(ctx context.Context, oldObj, newObj interface{}) {
-	logger := klog.FromContext(ctx)
 	switch v := newObj.(type) {
 	case *appsv1.Deployment:
-		logger.Info("Updating deployment", klog.KObj(v))
 	case *appsv1.StatefulSet:
-		logger.Info("Updating statefulset", klog.KObj(v))
 	case *appsv1.DaemonSet:
-		logger.Info("Adding daemonset", klog.KObj(v))
 	default:
-		logger.Error(nil, "Unrecognized object type")
 		panic(v)
 	}
 
@@ -137,29 +127,11 @@ func (c *Controller) update(ctx context.Context, oldObj, newObj interface{}) {
 }
 
 func (c *Controller) delete(ctx context.Context, obj interface{}) {
-	logger := klog.FromContext(ctx)
-	_, ok := obj.(*appsv1.Deployment)
-	if !ok {
-		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
-		if !ok {
-			utilruntime.HandleError(fmt.Errorf("couldn't get object from tombstone %#v", obj))
-			return
-		}
-		_, ok = tombstone.Obj.(*appsv1.Deployment)
-		if !ok {
-			utilruntime.HandleError(fmt.Errorf("tombstone contained object that is not a Deployment %#v", obj))
-			return
-		}
-	}
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
-		logger.Info("Deleting deployment", klog.KObj(v))
 	case *appsv1.StatefulSet:
-		logger.Info("Adding statefulset", klog.KObj(v))
 	case *appsv1.DaemonSet:
-		logger.Info("Adding daemonset", klog.KObj(v))
 	default:
-		logger.Error(nil, "Unrecognized object type")
 		panic(v)
 	}
 	c.enqueue(obj)
@@ -206,7 +178,6 @@ func (c *Controller) runWorker(ctx context.Context) {
 
 func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 	obj, shutdown := c.workqueue.Get()
-	logger := klog.FromContext(ctx)
 
 	if shutdown {
 		return false
@@ -229,7 +200,6 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 		}
 
 		c.workqueue.Forget(obj)
-		logger.Info("Successfully synced", "resourceName", key)
 		return nil
 	}(obj)
 
@@ -264,8 +234,6 @@ func (c *Controller) getKarmorPolicy(namespace, name string) (*securityv1.KubeAr
 }
 
 func (c *Controller) syncHandler(ctx context.Context, key string) error {
-	// logger := klog.LoggerWithValues(klog.FromContext(ctx), "resourceName", key)
-
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
@@ -284,16 +252,21 @@ func (c *Controller) syncHandler(ctx context.Context, key string) error {
 }
 
 func (c *Controller) handleDeployment(ctx context.Context, namespace, name string, deployment *appsv1.Deployment, err error) {
-	logger := klog.FromContext(ctx)
+	policyName := getDeploymentKarmorPolicyName(namespace, name)
 
 	if errors.IsNotFound(err) {
-		logger.Info("Deployment has been deleted", namespace, "/", name)
-		c.deleteKarmorPolicy(namespace, getDeploymentKarmorPolicyName(namespace, name))
+		c.deleteKarmorPolicy(namespace, policyName)
 		return
 	}
 
-	_, policyErr := c.getKarmorPolicy(namespace, getDeploymentKarmorPolicyName(namespace, name))
-	if !errors.IsNotFound(policyErr) && (deployment.Status.ReadyReplicas == deployment.Status.Replicas) {
+	isNotReady := deployment.Status.ReadyReplicas != deployment.Status.Replicas
+	if isNotReady {
+		c.deleteKarmorPolicy(namespace, policyName)
+		return
+	}
+
+	_, policyErr := c.getKarmorPolicy(namespace, policyName)
+	if !errors.IsNotFound(policyErr) {
 		return
 	}
 
@@ -301,16 +274,21 @@ func (c *Controller) handleDeployment(ctx context.Context, namespace, name strin
 }
 
 func (c *Controller) handleStatefulSet(ctx context.Context, namespace, name string, statefulset *appsv1.StatefulSet, err error) {
-	logger := klog.FromContext(ctx)
+	policyName := getStatefulSetPolicyName(namespace, name)
 
 	if errors.IsNotFound(err) {
-		logger.Info("StatefulSet has been deleted", namespace, "/", name)
-		c.deleteKarmorPolicy(namespace, getStatefulSetPolicyName(namespace, name))
+		c.deleteKarmorPolicy(namespace, policyName)
 		return
 	}
 
-	_, policyErr := c.getKarmorPolicy(namespace, getStatefulSetPolicyName(namespace, name))
-	if !errors.IsNotFound(policyErr) && (statefulset.Status.ReadyReplicas == statefulset.Status.Replicas) {
+	isNotReady := statefulset.Status.ReadyReplicas != statefulset.Status.Replicas
+	if isNotReady {
+		c.deleteKarmorPolicy(namespace, policyName)
+		return
+	}
+
+	_, policyErr := c.getKarmorPolicy(namespace, policyName)
+	if !errors.IsNotFound(policyErr) {
 		return
 	}
 
@@ -318,42 +296,55 @@ func (c *Controller) handleStatefulSet(ctx context.Context, namespace, name stri
 }
 
 func (c *Controller) handleDaemonSet(ctx context.Context, namespace, name string, daemonset *appsv1.DaemonSet, err error) {
-	logger := klog.FromContext(ctx)
+	policyName := getDaemonSetPolicyName(namespace, name)
 
 	if errors.IsNotFound(err) {
-		logger.Info("Daemonset has been deleted", namespace, "/", name)
-		c.deleteKarmorPolicy(namespace, getDaemonSetPolicyName(namespace, name))
+		c.deleteKarmorPolicy(namespace, policyName)
 		return
 	}
 
-	_, policyErr := c.getKarmorPolicy(namespace, getDaemonSetPolicyName(namespace, name))
-	if !errors.IsNotFound(policyErr) && (daemonset.Status.DesiredNumberScheduled == daemonset.Status.NumberAvailable) {
+	isNotReady := daemonset.Status.DesiredNumberScheduled != daemonset.Status.NumberAvailable
+	if isNotReady {
+		c.deleteKarmorPolicy(namespace, policyName)
+		return
+	}
+
+	_, policyErr := c.getKarmorPolicy(namespace, policyName)
+	if !errors.IsNotFound(policyErr) {
 		return
 	}
 
 	c.processDaemonSetWorkload(ctx, namespace, name, daemonset)
 }
 
-func (c *Controller) processWorkload(ctx context.Context, namespace, name string, template *corev1.PodTemplateSpec, isReady bool, getPolicyName func(string, string) string) {
+func (c *Controller) processWorkload(ctx context.Context, namespace, name string, template *corev1.PodTemplateSpec, getPolicyName func(string, string) string) {
 	logger := klog.FromContext(ctx)
 
-	if isReady {
-		secretPaths := []string{}
-		secretDirPaths := []string{}
-		labels := template.Labels
-		needSecureEnv := false
-		for key, value := range labels {
-			if key == "env-secret-secured" && value == "true" {
-				needSecureEnv = true
-				break
-			}
-		}
+	secretPaths := []string{}
+	secretDirPaths := []string{}
+	labels := template.Labels
+	needSecureEnv := false
+	needSecureMountedFile := false
 
-		if needSecureEnv {
-			secretDirPaths = append(secretDirPaths, "/vol/")
-			secretPaths = append(secretPaths, "/proc/1/environ")
+	for key, value := range labels {
+		if key == "env-secret-secured" && value == "true" {
+			needSecureEnv = true
 		}
+		if key == "mf-secret-secured" && value == "true" {
+			needSecureMountedFile = true
+		}
+	}
 
+	if !needSecureEnv && !needSecureMountedFile {
+		return
+	}
+
+	if needSecureEnv {
+		secretDirPaths = append(secretDirPaths, "/vol/")
+		secretPaths = append(secretPaths, "/proc/1/environ")
+	}
+
+	if needSecureMountedFile {
 		for _, volume := range template.Spec.Volumes {
 			if volume.Secret != nil {
 				for _, container := range template.Spec.Containers {
@@ -369,38 +360,28 @@ func (c *Controller) processWorkload(ctx context.Context, namespace, name string
 				}
 			}
 		}
+	}
 
-		if len(secretDirPaths) != 0 {
-			policyName := getPolicyName(namespace, name)
-			if _, err := c.karmorpolicyLister.KubeArmorPolicies(namespace).Get(policyName); err != nil {
-				logger.Info("Creating policy", policyName)
+	policyName := getPolicyName(namespace, name)
+	logger.Info("Creating policy", policyName)
 
-				newPolicy := newKarmorSecretPolicy(labels, secretPaths, secretDirPaths, namespace, policyName)
-				_, err := c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
-				if err != nil {
-					logger.Error(err, "Error creating policy")
-				}
-
-			}
-		}
-	} else {
-		c.deleteKarmorPolicy(namespace, getPolicyName(namespace, name))
+	newPolicy := newKarmorSecretPolicy(labels, secretPaths, secretDirPaths, namespace, policyName)
+	_, err := c.karmorpolicyclientset.SecurityV1().KubeArmorPolicies(namespace).Create(context.TODO(), newPolicy, v1.CreateOptions{})
+	if err != nil {
+		logger.Error(err, "Error creating policy")
 	}
 }
 
 func (c *Controller) processDeploymentWorkload(ctx context.Context, namespace, name string, deployment *appsv1.Deployment) {
-	isReady := deployment.Status.ReadyReplicas == deployment.Status.Replicas
-	c.processWorkload(ctx, namespace, name, &deployment.Spec.Template, isReady, getDeploymentKarmorPolicyName)
+	c.processWorkload(ctx, namespace, name, &deployment.Spec.Template, getDeploymentKarmorPolicyName)
 }
 
 func (c *Controller) processStatefulSetWorkload(ctx context.Context, namespace, name string, statefulset *appsv1.StatefulSet) {
-	isReady := statefulset.Status.ReadyReplicas == statefulset.Status.Replicas
-	c.processWorkload(ctx, namespace, name, &statefulset.Spec.Template, isReady, getStatefulSetPolicyName)
+	c.processWorkload(ctx, namespace, name, &statefulset.Spec.Template, getStatefulSetPolicyName)
 }
 
 func (c *Controller) processDaemonSetWorkload(ctx context.Context, namespace, name string, daemonset *appsv1.DaemonSet) {
-	isReady := daemonset.Status.NumberReady == daemonset.Status.NumberAvailable
-	c.processWorkload(ctx, namespace, name, &daemonset.Spec.Template, isReady, getDaemonSetPolicyName)
+	c.processWorkload(ctx, namespace, name, &daemonset.Spec.Template, getDaemonSetPolicyName)
 }
 
 func newKarmorSecretPolicy(matchLabels map[string]string, secretPaths []string, secretDirPaths []string, namespace string, policyName string) *securityv1.KubeArmorPolicy {

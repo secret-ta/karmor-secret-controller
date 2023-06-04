@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pengujian-integrasi-gabungan-daemonset
+spec:
+  selector:
+    matchLabels:
+      app: pengujian-integrasi-gabungan-daemonset
+  template:
+    metadata:
+      labels:
+        app: pengujian-integrasi-gabungan-daemonset
+        env-secret-secured: "true"
+        mf-secret-secured: "true"
+    spec:
+      initContainers:
+      - name: create-env-file
+        image: kadeksuryam/init-container-secret:latest
+        imagePullPolicy: Always
+        env:
+        # proxy ITB, initContainer's process need to access internet
+        - name: HTTP_PROXY
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: HTTPS_PROXY
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: http_proxy
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        - name: https_proxy
+          value: http://kadeksuryam:70235255@cache.itb.ac.id:8080/
+        # secrets definition start
+        - name: USERNAME_V1
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-integrasi-gabungan-secret-v1
+                key: USERNAME
+        - name: PASSWORD_V1
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-integrasi-gabungan-secret-v1
+                key: PASSWORD
+        - name: USERNAME_V2
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-integrasi-gabungan-secret-v2
+                key: USERNAME
+        - name: PASSWORD_V2
+          valueFrom:
+              secretKeyRef:
+                name: pengujian-integrasi-gabungan-secret-v2
+                key: PASSWORD
+        # secrets definition end
+        - name: IMAGE_NAME # mandatory, same as the containers[0].image below
+          value: kadeksuryam/pengujian-integrasi-gabungan:latest
+        volumeMounts:
+        - name: init-vol
+          mountPath: /vol
+      containers:
+      - name: print-envs
+        image: kadeksuryam/pengujian-integrasi-gabungan:latest
+        command:
+        - /vol/init.sh
+        env:
+        - name: SECRET_V1_USERNAME_PATH
+          value: /etc/secret-v1/USERNAME
+        - name: SECRET_V1_PASSWORD_PATH
+          value: /etc/secret-v1/PASSWORD
+        - name: SECRET_V2_USERNAME_PATH
+          value: /etc/secret-v2/USERNAME
+        - name: SECRET_V2_PASSWORD_PATH
+          value: /etc/secret-v2/PASSWORD
+        volumeMounts:
+        - name: init-vol
+          mountPath: /vol
+        - name: secret-v1-volume
+          mountPath: "/etc/secret-v1"
+          readOnly: true
+        - name: secret-v2-volume
+          mountPath: "/etc/secret-v2"
+          readOnly: true
+      volumes:
+      - name: init-vol
+        emptyDir: {}
+      - name: secret-v1-volume
+        secret:
+          secretName: pengujian-integrasi-gabungan-secret-v1
+      - name: secret-v2-volume
+        secret:
+          secretName: pengujian-integrasi-gabungan-secret-v2
